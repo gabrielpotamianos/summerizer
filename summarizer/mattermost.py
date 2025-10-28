@@ -32,10 +32,12 @@ class MattermostClient:
     def __init__(self, config: MattermostConfig) -> None:
         self._config = config
         self._session = requests.Session()
-        self._session.headers.update({
-            "Authorization": f"Bearer {config.token}",
-            "Accept": "application/json",
-        })
+        self._session.headers.update(
+            {
+                "Authorization": f"Bearer {config.token}",
+                "Accept": "application/json",
+            }
+        )
         LOGGER.debug("Mattermost client initialised with base url %s", config.base_url)
 
     def _url(self, path: str) -> str:
@@ -83,7 +85,9 @@ class MattermostClient:
 
         for team in teams:
             team_id = team["id"]
-            channels = {channel["id"]: channel for channel in self.list_channels(team_id)}
+            channels = {
+                channel["id"]: channel for channel in self.list_channels(team_id)
+            }
             members = self.list_channel_members(team_id)
             for member in members:
                 channel_id = member.get("channel_id")
@@ -102,7 +106,8 @@ class MattermostClient:
                     continue
                 if self._is_channel_muted(member):
                     LOGGER.debug(
-                        "Skipping muted channel %s", channel.get("display_name", channel_id)
+                        "Skipping muted channel %s",
+                        channel.get("display_name", channel_id),
                     )
                     continue
                 last_viewed_at = self._coerce_int(member.get("last_viewed_at"))
@@ -113,14 +118,10 @@ class MattermostClient:
                 unread_from_counts = max(0, total_msg_count - read_msg_count)
                 unread_total = max(unread_from_counts, mention_count)
                 channel_type = str(channel.get("type", "")).upper()
-                if channel_type == "G" and mention_count <= 0:
-                    # Group messages should only surface when the channel is
-                    # highlighted which corresponds to mention activity.
-                    continue
                 if last_post_at <= last_viewed_at and unread_total <= 0:
                     continue
                 if unread_total <= 0 and last_post_at > last_viewed_at:
-                    if channel_type == "G":
+                    if channel_type != "":
                         # Do not promote group messages without mentions.
                         continue
                     unread_total = 1
@@ -218,14 +219,12 @@ class MattermostClient:
     @staticmethod
     def _is_group_highlight_disabled(channel: Dict[str, object]) -> bool:
         channel_type = str(channel.get("type", "")).upper()
-        if channel_type != "G":
+        if channel_type != "":
             return False
         props = channel.get("props")
         if not isinstance(props, dict):
             return False
         disable_highlight = props.get("disable_group_highlight")
-        if isinstance(disable_highlight, bool):
-            return disable_highlight
         if isinstance(disable_highlight, str):
             return disable_highlight.lower() == "true"
         return False
@@ -241,7 +240,9 @@ class MattermostClient:
                 return 0
         return 0
 
-    def acknowledge_channel(self, channel_id: str, viewed_at: Optional[datetime] = None) -> None:
+    def acknowledge_channel(
+        self, channel_id: str, viewed_at: Optional[datetime] = None
+    ) -> None:
         payload: Dict[str, int] = {}
         if viewed_at is not None:
             payload["viewed_at"] = int(viewed_at.timestamp() * 1000)
@@ -251,4 +252,6 @@ class MattermostClient:
             timeout=30,
         )
         if response.status_code >= 400:
-            LOGGER.warning("Failed to acknowledge channel %s: %s", channel_id, response.text)
+            LOGGER.warning(
+                "Failed to acknowledge channel %s: %s", channel_id, response.text
+            )
