@@ -70,7 +70,8 @@ class SummariserService(threading.Thread):
         for unread in self._client.list_unread_channels():
             posts = self._client.get_unread_posts(
                 unread.channel_id,
-                since=unread.last_viewed_at,
+                last_viewed_at=unread.last_viewed_at,
+                unread_count=unread.unread_count,
             )
             formatted_messages, start_ts, end_ts = collate_messages(posts)
             if not formatted_messages:
