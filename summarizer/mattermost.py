@@ -106,9 +106,17 @@ class MattermostClient:
                 read_msg_count = self._coerce_int(member.get("msg_count"))
                 unread_from_counts = max(0, total_msg_count - read_msg_count)
                 unread_total = max(unread_from_counts, mention_count)
+                channel_type = str(channel.get("type", "")).upper()
+                if channel_type == "G" and mention_count <= 0:
+                    # Group messages should only surface when the channel is
+                    # highlighted which corresponds to mention activity.
+                    continue
                 if last_post_at <= last_viewed_at and unread_total <= 0:
                     continue
                 if unread_total <= 0 and last_post_at > last_viewed_at:
+                    if channel_type == "G":
+                        # Do not promote group messages without mentions.
+                        continue
                     unread_total = 1
                 unread = ChannelUnread(
                     team_id=team_id,
