@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 
 _INVALID_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
@@ -42,6 +42,40 @@ class TranscriptStorage:
         path = channel_dir / "summary.txt"
         path.write_text(summary, encoding="utf-8")
         return path
+
+    def _metadata_path(self, channel_name: str) -> Path:
+        return self.channel_dir(channel_name) / "metadata.json"
+
+    def load_metadata(self, channel_name: str) -> Dict[str, int]:
+        path = self._metadata_path(channel_name)
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+    def save_metadata(self, channel_name: str, metadata: Dict[str, int]) -> Path:
+        path = self._metadata_path(channel_name)
+        path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+        return path
+
+    def get_last_processed_timestamp(self, channel_name: str) -> Optional[int]:
+        metadata = self.load_metadata(channel_name)
+        value = metadata.get("last_processed_timestamp")
+        return int(value) if isinstance(value, (int, float)) else None
+
+    def update_last_processed_timestamp(
+        self, channel_name: str, timestamp: Optional[int]
+    ) -> None:
+        if timestamp is None:
+            return
+        metadata = self.load_metadata(channel_name)
+        current = metadata.get("last_processed_timestamp")
+        if isinstance(current, (int, float)) and int(timestamp) <= int(current):
+            return
+        metadata["last_processed_timestamp"] = int(timestamp)
+        self.save_metadata(channel_name, metadata)
 
     def load_summary(self, channel_name: str) -> str:
         path = self.channel_dir(channel_name) / "summary.txt"

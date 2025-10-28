@@ -73,6 +73,15 @@ class SummariserService(threading.Thread):
                 last_viewed_at=unread.last_viewed_at,
                 unread_count=unread.unread_count,
             )
+            last_processed = self._storage.get_last_processed_timestamp(
+                unread.channel_name
+            )
+            if last_processed is not None:
+                posts = [
+                    post
+                    for post in posts
+                    if int(post.get("create_at", 0)) > last_processed
+                ]
             formatted_messages, start_ts, end_ts = collate_messages(posts)
             if not formatted_messages:
                 LOGGER.debug("No new messages for %s", unread.display_name)
@@ -85,6 +94,9 @@ class SummariserService(threading.Thread):
             )
             summary = self._llm.summarise(formatted_messages, context)
             self._storage.save_summary(unread.channel_name, summary)
+            self._storage.update_last_processed_timestamp(
+                unread.channel_name, end_ts
+            )
             LOGGER.info("Updated summary for %s", unread.display_name)
             self._queue.put(ChannelSummary(unread, summary))
 
