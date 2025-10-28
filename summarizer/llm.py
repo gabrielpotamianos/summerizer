@@ -106,26 +106,30 @@ class LocalLLM:
         return self._generate_final_summary(segment_context, context)
 
     def _summarise_segment(self, messages: Sequence[str]) -> str:
-        conversation = "\n".join(messages)
-        prompt = _SEGMENT_PROMPT.format(conversation=conversation)
+        prompt = self._build_prompt(_SEGMENT_PROMPT, messages)
         return self._run_llm(prompt)
 
     def _generate_final_summary(
         self, conversation_items: Sequence[str], context: SummaryContext
     ) -> str:
-        conversation = "\n".join(conversation_items)
-        prompt = _SUMMARY_PROMPT.format(
+        prompt = self._build_prompt(
+            _SUMMARY_PROMPT,
+            conversation_items,
             group_name=context.group_name,
             start_date=context.start_date,
             end_date=context.end_date,
-            conversation=conversation,
         )
         return self._run_llm(prompt)
 
     def _run_llm(self, prompt: str) -> str:
+        prompt_tokens = self._count_tokens(prompt)
+        available_for_completion = max(
+            self._config.context_window - prompt_tokens - 1, 1
+        )
+        max_tokens = max(1, min(self._config.max_tokens, available_for_completion))
         output = self._llama(
             prompt,
-            max_tokens=self._config.max_tokens,
+            max_tokens=max_tokens,
         )
         choices = output.get("choices", [])
         if not choices:
@@ -133,6 +137,106 @@ class LocalLLM:
             return prompt[: self._config.max_tokens]
         text = choices[0].get("text", "").strip()
         return text
+
+    def _build_prompt(
+        self,
+        template: str,
+        conversation_items: Sequence[str],
+        **template_kwargs: str,
+    ) -> str:
+        base_prompt = template.format(conversation="", **template_kwargs)
+        prompt_budget = max(self._config.context_window - 32, 1)
+        base_tokens = self._count_tokens(base_prompt)
+        available_for_conversation = max(
+            prompt_budget - self._config.max_tokens - base_tokens,
+            0,
+        )
+        trimmed_items = self._trim_conversation_items(
+            conversation_items, available_for_conversation
+        )
+        conversation = "\n".join(trimmed_items)
+        prompt = template.format(conversation=conversation, **template_kwargs)
+        prompt_tokens = self._count_tokens(prompt)
+        budget = self._config.context_window - 1
+        while prompt_tokens > budget and trimmed_items:
+            LOGGER.debug(
+                "Prompt exceeds context window (%d > %d); trimming conversation",
+                prompt_tokens,
+                budget,
+            )
+            if len(trimmed_items) == 1:
+                trimmed_items = [
+                    self._trim_text_to_token_budget(
+                        trimmed_items[0], max(8, budget // 2)
+                    )
+                ]
+            else:
+                trimmed_items = trimmed_items[1:]
+            conversation = "\n".join(item for item in trimmed_items if item)
+            prompt = template.format(conversation=conversation, **template_kwargs)
+            prompt_tokens = self._count_tokens(prompt)
+        return prompt
+
+    def _trim_conversation_items(
+        self, conversation_items: Sequence[str], token_limit: int
+    ) -> Sequence[str]:
+        if not conversation_items:
+            return []
+        if token_limit <= 0:
+            fallback_tokens = max(8, min(self._config.max_tokens, 64))
+            snippet = self._trim_text_to_token_budget(
+                conversation_items[-1], fallback_tokens
+            )
+            return [snippet] if snippet else []
+        trimmed: list[str] = []
+        used_tokens = 0
+        for item in reversed(conversation_items):
+            item_tokens = self._count_tokens(item + "\n")
+            if used_tokens + item_tokens <= token_limit:
+                trimmed.insert(0, item)
+                used_tokens += item_tokens
+                continue
+            remaining = token_limit - used_tokens
+            if remaining <= 0:
+                break
+            snippet = self._trim_text_to_token_budget(item, remaining)
+            if snippet:
+                trimmed.insert(0, snippet)
+            break
+        if not trimmed:
+            snippet = self._trim_text_to_token_budget(
+                conversation_items[-1], max(token_limit, 8)
+            )
+            return [snippet] if snippet else []
+        return trimmed
+
+    def _trim_text_to_token_budget(self, text: str, max_tokens: int) -> str:
+        if not text or max_tokens <= 0:
+            return ""
+        if self._count_tokens(text) <= max_tokens:
+            return text
+        approx_chars = max(1, max_tokens * 4)
+        snippet = text[-approx_chars:]
+        while snippet and self._count_tokens(snippet) > max_tokens and approx_chars > 1:
+            approx_chars = max(1, int(approx_chars * 0.9))
+            snippet = text[-approx_chars:]
+        while snippet and self._count_tokens(snippet) > max_tokens:
+            snippet = snippet[1:]
+        snippet = snippet.lstrip()
+        if not snippet:
+            return ""
+        candidate = snippet
+        if not candidate.startswith("…"):
+            candidate = f"… {candidate}"
+        while candidate and self._count_tokens(candidate) > max_tokens:
+            candidate = candidate[1:]
+        return candidate
+
+    def _count_tokens(self, text: str) -> int:
+        if not text:
+            return 0
+        tokens = self._llama.tokenize(text.encode("utf-8"), add_bos=False)
+        return len(tokens)
 
     def _chunk_messages(self, messages: Sequence[str]) -> Sequence[Sequence[str]]:
         """Split messages into chunks that fit comfortably within the context."""
