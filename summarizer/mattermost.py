@@ -94,6 +94,12 @@ class MattermostClient:
                     continue
                 if int(channel.get("delete_at", 0) or 0) != 0:
                     continue
+                if self._is_group_highlight_disabled(channel):
+                    LOGGER.debug(
+                        "Skipping channel %s due to disabled group highlight",
+                        channel.get("display_name", channel_id),
+                    )
+                    continue
                 if self._is_channel_muted(member):
                     LOGGER.debug(
                         "Skipping muted channel %s", channel.get("display_name", channel_id)
@@ -207,6 +213,21 @@ class MattermostClient:
             mark_unread = notify_props.get("mark_unread")
             if isinstance(mark_unread, str) and mark_unread.lower() == "mention":
                 return True
+        return False
+
+    @staticmethod
+    def _is_group_highlight_disabled(channel: Dict[str, object]) -> bool:
+        channel_type = str(channel.get("type", "")).upper()
+        if channel_type != "G":
+            return False
+        props = channel.get("props")
+        if not isinstance(props, dict):
+            return False
+        disable_highlight = props.get("disable_group_highlight")
+        if isinstance(disable_highlight, bool):
+            return disable_highlight
+        if isinstance(disable_highlight, str):
+            return disable_highlight.lower() == "true"
         return False
 
     @staticmethod
