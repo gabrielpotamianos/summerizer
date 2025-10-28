@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 from queue import Queue
 from typing import Dict, Iterable
 
 from .config import ServiceConfig
-from .llm import LocalLLM, collate_messages
+from .llm import LocalLLM, SummaryContext, collate_messages
 from .mattermost import ChannelUnread, MattermostClient
 from .storage import TranscriptStorage
 
@@ -71,15 +72,27 @@ class SummariserService(threading.Thread):
                 unread.channel_id,
                 since=unread.last_viewed_at,
             )
-            formatted_messages = collate_messages(posts)
+            formatted_messages, start_ts, end_ts = collate_messages(posts)
             if not formatted_messages:
                 LOGGER.debug("No new messages for %s", unread.display_name)
                 continue
             self._storage.save_messages(unread.channel_name, posts)
-            summary = self._llm.summarise(formatted_messages)
+            context = SummaryContext(
+                group_name=unread.display_name or unread.channel_name,
+                start_date=self._format_timestamp(start_ts),
+                end_date=self._format_timestamp(end_ts),
+            )
+            summary = self._llm.summarise(formatted_messages, context)
             self._storage.save_summary(unread.channel_name, summary)
             LOGGER.info("Updated summary for %s", unread.display_name)
             self._queue.put(ChannelSummary(unread, summary))
+
+    @staticmethod
+    def _format_timestamp(timestamp: int | None) -> str:
+        if timestamp is None:
+            return "Unknown"
+        dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M %Z")
 
     def load_existing_summaries(self) -> Iterable[ChannelSummary]:
         for channel in self._storage.list_channels():
