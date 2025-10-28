@@ -3,6 +3,11 @@ mattermost:
   token: "YOUR_PERSONAL_ACCESS_TOKEN"
 summarizer:
   model_path: "/absolute/path/to/llama-model.bin"
+  # Optional: provide custom prompt or analysis templates to fine tune summaries.
+  # prompt_template: |
+  #   ...
+  # analysis_template: |
+  #   ...
 storage:
   data_dir: "~/Library/Application Support/MattermostSummaries"
 poll_interval: 90

@@ -27,6 +27,7 @@ class MattermostMonitor:
         self._summarizer = Summarizer(
             model_path=str(config.summarizer.model_path),
             prompt_template=config.summarizer.prompt_template,
+            analysis_template=config.summarizer.analysis_template,
             max_tokens=config.summarizer.max_tokens,
             temperature=config.summarizer.temperature,
         )
@@ -35,6 +36,7 @@ class MattermostMonitor:
         self._stop_event = threading.Event()
         self._subscribers: list[SummaryCallback] = []
         self._queue: Queue[ChannelSnapshot] = Queue()
+        self._user_cache: dict[str, str] = {}
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -86,9 +88,14 @@ class MattermostMonitor:
             self._notify(snapshot)
 
     def _summarize_posts(self, channel: Channel, posts: Iterable) -> str:
+        posts = list(posts)
+        user_ids = [post.user_id for post in posts if post.user_id]
+        display_names = self._resolve_user_names(user_ids)
+        for post in posts:
+            post.user_name = display_names.get(post.user_id)
         messages = [
-            f"[{post.create_at:%Y-%m-%d %H:%M}] {post.user_id}: {post.message}"
-            for post in posts
+            f"#{idx + 1} [{post.create_at:%Y-%m-%d %H:%M}] {post.user_name or post.user_id}:\n{post.message.strip()}"
+            for idx, post in enumerate(posts)
         ]
         logger.info(
             "Summarizing %d posts for channel %s", len(messages), channel.display_name
@@ -96,6 +103,17 @@ class MattermostMonitor:
         return self._summarizer.summarize_messages(
             messages, channel_name=channel.display_name or channel.name
         )
+
+    def _resolve_user_names(self, user_ids: Iterable[str]) -> dict[str, str]:
+        missing = [uid for uid in dict.fromkeys(user_ids) if uid and uid not in self._user_cache]
+        if missing:
+            try:
+                names = self._client.get_user_display_names(missing)
+            except Exception:  # pragma: no cover - network failure should not stop polling
+                logger.exception("Failed to resolve user names from Mattermost")
+            else:
+                self._user_cache.update(names)
+        return {uid: self._user_cache.get(uid, uid) for uid in user_ids}
 
     def _notify(self, snapshot: ChannelSnapshot) -> None:
         for callback in list(self._subscribers):

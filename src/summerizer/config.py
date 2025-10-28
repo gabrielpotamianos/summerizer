@@ -22,10 +22,21 @@ class SummarizerConfig:
 
     model_path: Path
     prompt_template: str = (
-        "You are summarizing unread messages from the Mattermost channel "
-        '"{channel_name}". Provide a concise summary that highlights key '
-        "decisions, blockers, follow-ups, and action items. Use bullet points "
-        "when appropriate.\n\nConversation transcript:\n{content}\n\nSummary:"
+        "You are summarizing unread Mattermost messages for \"{channel_name}\". "
+        "Leverage the numbered transcript and the internal analysis to produce a "
+        "clear, reference-rich briefing for someone catching up.\n"
+        "Requirements:\n"
+        "- Start with a short overview naming key participants and referencing message numbers.\n"
+        "- Provide bullet lists for Key Updates, Decisions & Actions, and Open Questions.\n"
+        "- Quote or reference exact phrases when they clarify context.\n"
+        "- If a section has nothing to report, state \"None noted\".\n\n"
+        "Numbered transcript:\n{content}\n\nInternal analysis:\n{analysis}\n\nSummary:"
+    )
+    analysis_template: str | None = (
+        "You are reviewing unread Mattermost messages for \"{channel_name}\". "
+        "Consider the numbered transcript below and reason carefully about the most "
+        "important updates, decisions, blockers, and follow-ups. Cite message numbers "
+        "as evidence.\n\nNumbered transcript:\n{content}\n\nDeliberation:"
     )
     max_tokens: int = 512
     temperature: float = 0.2
@@ -93,6 +104,10 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AppConfig:
         raise ValueError("Summarizer model_path must be provided in config or env.")
 
     prompt_template = summarizer_cfg.get("prompt_template")
+    sentinel = object()
+    analysis_template = summarizer_cfg.get("analysis_template", sentinel)
+    if analysis_template is sentinel:
+        analysis_template = SummarizerConfig.__dataclass_fields__["analysis_template"].default  # type: ignore[index]
     max_tokens = int(summarizer_cfg.get("max_tokens", 512))
     temperature = float(summarizer_cfg.get("temperature", 0.2))
 
@@ -103,6 +118,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> AppConfig:
         summarizer=SummarizerConfig(
             model_path=_coerce_path(model_path_value),
             prompt_template=prompt_template or SummarizerConfig.__dataclass_fields__["prompt_template"].default,  # type: ignore[index]
+            analysis_template=analysis_template,
             max_tokens=max_tokens,
             temperature=temperature,
         ),

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, List, Mapping, Optional
+from typing import Iterable, List, Mapping, Optional, Sequence
 
 import requests
 
@@ -18,6 +18,7 @@ class Channel:
     name: str
     type: str
     last_viewed_at: datetime
+    last_post_at: datetime
     mention_count: int
     msg_count: int
 
@@ -28,6 +29,7 @@ class Post:
     user_id: str
     message: str
     create_at: datetime
+    user_name: str | None = None
 
 
 class MattermostClient:
@@ -36,10 +38,12 @@ class MattermostClient:
     def __init__(self, base_url: str, token: str) -> None:
         self._base_url = base_url.rstrip("/")
         self._session = requests.Session()
-        self._session.headers.update({
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-        })
+        self._session.headers.update(
+            {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            }
+        )
 
     def close(self) -> None:
         self._session.close()
@@ -73,11 +77,19 @@ class MattermostClient:
                 if not member:
                     continue
                 channel_type = channel.get("type", "")
-                if channel_type not in {"G", "P"}:
+                # Only surface group messages ("G") so the UI matches the unread badge.
+                if channel_type != "G":
                     continue
                 mention_count = int(member.get("mention_count", 0))
                 msg_count = int(member.get("msg_count", 0))
-                if mention_count == 0 and msg_count == 0:
+                if mention_count <= 0 and msg_count <= 0:
+                    continue
+                last_viewed_raw = member.get("last_viewed_at", 0)
+                last_post_raw = channel.get("last_post_at", 0)
+                last_viewed_at = datetime.fromtimestamp(last_viewed_raw / 1000)
+                last_post_at = datetime.fromtimestamp(last_post_raw / 1000)
+                if last_post_at <= last_viewed_at:
+                    # No new posts since the channel was last viewed.
                     continue
                 yield Channel(
                     id=channel["id"],
@@ -85,7 +97,8 @@ class MattermostClient:
                     display_name=channel.get("display_name") or channel.get("name", ""),
                     name=channel.get("name", ""),
                     type=channel_type,
-                    last_viewed_at=datetime.fromtimestamp(member.get("last_viewed_at", 0) / 1000),
+                    last_viewed_at=last_viewed_at,
+                    last_post_at=last_post_at,
                     mention_count=mention_count,
                     msg_count=msg_count,
                 )
@@ -119,6 +132,31 @@ class MattermostClient:
             unread_posts = unread_posts[-channel.msg_count :]
         logger.debug("Fetched %d unread posts for channel %s", len(unread_posts), channel.display_name)
         return unread_posts
+
+    def get_user_display_names(self, user_ids: Sequence[str]) -> Mapping[str, str]:
+        unique_ids = [uid for uid in dict.fromkeys(user_ids) if uid]
+        if not unique_ids:
+            return {}
+        response = self._session.post(
+            self._url("/api/v4/users/ids"), json=unique_ids, timeout=30
+        )
+        response.raise_for_status()
+        users = response.json()
+        display_names: dict[str, str] = {}
+        for user in users:
+            name_parts = [user.get("first_name", "").strip(), user.get("last_name", "").strip()]
+            full_name = " ".join(part for part in name_parts if part)
+            nickname = user.get("nickname", "").strip()
+            username = user.get("username", "").strip()
+            display_names[user["id"]] = next(
+                (
+                    value
+                    for value in (full_name, nickname, username)
+                    if value
+                ),
+                user["id"],
+            )
+        return display_names
 
 
 __all__ = ["MattermostClient", "Channel", "Post"]

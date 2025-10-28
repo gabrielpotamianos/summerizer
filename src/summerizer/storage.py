@@ -36,6 +36,7 @@ class ChannelSnapshot:
                 "display_name": self.channel.display_name,
                 "type": self.channel.type,
                 "last_viewed_at": self.channel.last_viewed_at.isoformat(),
+                "last_post_at": self.channel.last_post_at.isoformat(),
                 "mention_count": self.channel.mention_count,
                 "msg_count": self.channel.msg_count,
             },
@@ -44,6 +45,7 @@ class ChannelSnapshot:
                 {
                     "id": post.id,
                     "user_id": post.user_id,
+                    "user_name": post.user_name,
                     "message": post.message,
                     "create_at": post.create_at.isoformat(),
                 }
@@ -75,7 +77,8 @@ class Storage:
         with path.open("w", encoding="utf-8") as f:
             for post in posts:
                 timestamp = post.create_at.strftime("%Y-%m-%d %H:%M")
-                f.write(f"[{timestamp}] {post.user_id}: {post.message}\n")
+                author = post.user_name or post.user_id
+                f.write(f"[{timestamp}] {author}: {post.message}\n")
         logger.debug("Wrote raw messages for %s to %s", channel.display_name, path)
         return path
 
