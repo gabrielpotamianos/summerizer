@@ -99,6 +99,7 @@ class MattermostClient:
                         "Skipping muted channel %s", channel.get("display_name", channel_id)
                     )
                     continue
+                channel_type = channel.get("type")
                 last_viewed_at = self._coerce_int(member.get("last_viewed_at"))
                 last_post_at = self._coerce_int(channel.get("last_post_at"))
                 mention_count = self._coerce_int(member.get("mention_count"))
@@ -110,6 +111,12 @@ class MattermostClient:
                     continue
                 if unread_total <= 0 and last_post_at > last_viewed_at:
                     unread_total = 1
+                if channel_type == "G" and not self._is_channel_highlighted(channel, member):
+                    LOGGER.debug(
+                        "Skipping non-highlighted group channel %s",
+                        channel.get("display_name", channel_id),
+                    )
+                    continue
                 unread = ChannelUnread(
                     team_id=team_id,
                     channel_id=channel_id,
@@ -188,6 +195,29 @@ class MattermostClient:
             channel_id,
         )
         return unread_posts
+
+    @staticmethod
+    def _is_channel_highlighted(
+        channel: Dict[str, object], member: Dict[str, object]
+    ) -> bool:
+        """Return True if Mattermost marks the channel as highlighted for the user."""
+
+        highlight_keys = ("is_channel_highlighted", "is_highlighted", "highlighted")
+        for key in highlight_keys:
+            for source in (channel, member):
+                value = source.get(key)
+                if isinstance(value, bool):
+                    if value:
+                        return True
+                elif isinstance(value, str):
+                    if value.lower() == "true":
+                        return True
+        mention_fields = (
+            member.get("mention_count"),
+            member.get("mention_count_root"),
+            member.get("mention_count_threads"),
+        )
+        return any(MattermostClient._coerce_int(field) > 0 for field in mention_fields)
 
     @staticmethod
     def _is_channel_muted(member: Dict[str, object]) -> bool:
