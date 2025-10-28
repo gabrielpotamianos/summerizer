@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import requests
 
@@ -69,36 +69,67 @@ class MattermostClient:
         return response.json()
 
     def list_unread_channels(self) -> Iterable[ChannelUnread]:
-        """Yield unread information for the current user across all teams."""
+        """Yield unread channel metadata sorted by most recent activity.
+
+        Muted channels are ignored and only conversations that the current user
+        belongs to are returned. Channels are yielded in descending order of the
+        most recent post so the freshest conversations are processed first.
+        """
 
         teams = self.list_teams()
         LOGGER.debug("Fetched %d teams", len(teams))
+
+        candidates: List[Tuple[int, ChannelUnread]] = []
 
         for team in teams:
             team_id = team["id"]
             channels = {channel["id"]: channel for channel in self.list_channels(team_id)}
             members = self.list_channel_members(team_id)
             for member in members:
-                mention_count = member.get("mention_count", 0)
-                msg_count = member.get("msg_count", 0)
-                last_viewed_at = member.get("last_viewed_at", 0)
-                channel_id = member["channel_id"]
+                channel_id = member.get("channel_id")
+                if not channel_id:
+                    continue
                 channel = channels.get(channel_id)
                 if not channel:
                     continue
-                total_unread = mention_count or max(0, msg_count - member.get("msg_count_root", msg_count))
-                if total_unread <= 0:
+                if int(channel.get("delete_at", 0) or 0) != 0:
                     continue
+                if self._is_channel_muted(member):
+                    LOGGER.debug(
+                        "Skipping muted channel %s", channel.get("display_name", channel_id)
+                    )
+                    continue
+                last_viewed_at = self._coerce_int(member.get("last_viewed_at"))
+                last_post_at = self._coerce_int(channel.get("last_post_at"))
+                mention_count = self._coerce_int(member.get("mention_count"))
+                total_msg_count = self._coerce_int(channel.get("total_msg_count"))
+                read_msg_count = self._coerce_int(member.get("msg_count"))
+                unread_from_counts = max(0, total_msg_count - read_msg_count)
+                unread_total = max(unread_from_counts, mention_count)
+                if last_post_at <= last_viewed_at and unread_total <= 0:
+                    continue
+                if unread_total <= 0 and last_post_at > last_viewed_at:
+                    unread_total = 1
                 unread = ChannelUnread(
                     team_id=team_id,
                     channel_id=channel_id,
                     channel_name=channel.get("name", channel_id),
-                    display_name=channel.get("display_name", channel.get("name", channel_id)),
-                    unread_count=total_unread,
+                    display_name=channel.get(
+                        "display_name", channel.get("name", channel_id)
+                    ),
+                    unread_count=unread_total,
                     last_viewed_at=last_viewed_at,
                 )
-                LOGGER.debug("Channel %s has %d unread messages", unread.display_name, total_unread)
-                yield unread
+                LOGGER.debug(
+                    "Channel %s has %d unread messages (last post %d)",
+                    unread.display_name,
+                    unread_total,
+                    last_post_at,
+                )
+                candidates.append((last_post_at, unread))
+
+        for _, unread in sorted(candidates, key=lambda item: item[0], reverse=True):
+            yield unread
 
     def get_unread_posts(
         self,
@@ -106,21 +137,20 @@ class MattermostClient:
         last_viewed_at: Optional[int] = None,
         unread_count: int = 0,
     ) -> List[Dict[str, str]]:
-        """Return only unread posts for the given channel.
+        """Return unread posts in newest-first order for the given channel.
 
-        The Mattermost posts API returns conversation history ordered by
-        descending timestamps. When a channel has never been viewed the
-        ``last_viewed_at`` timestamp is ``0`` which causes the API to return the
-        entire channel history. To make sure we only summarise unread
-        conversations we post-filter the response so that we only keep messages
-        that were created after ``last_viewed_at``. If the channel has never
-        been viewed we fall back to the ``unread_count`` provided by the unread
-        listing to select the most recent messages.
+        When a channel has been viewed previously the response includes unread
+        posts newer than ``last_viewed_at`` followed by the most recent message
+        that the user has already seen. This provides context without requiring
+        a full history fetch. Channels that have never been viewed fall back to
+        ``unread_count`` (or a small default) to avoid downloading the complete
+        history.
         """
 
         params: Dict[str, int] = {}
-        if last_viewed_at is not None and last_viewed_at > 0:
-            params["since"] = last_viewed_at
+        last_viewed_ts = self._coerce_int(last_viewed_at)
+        if last_viewed_ts > 0:
+            params["since"] = max(last_viewed_ts - 1, 0)
         response = self._session.get(
             self._url(f"/channels/{channel_id}/posts"),
             params=params,
@@ -132,17 +162,24 @@ class MattermostClient:
         posts = posts_payload.get("posts", {})
         ordered_posts = [posts[post_id] for post_id in order if post_id in posts]
 
-        # ``order`` is returned newest-first; sort the selected posts so the
-        # conversation flows chronologically.
-        ordered_posts.sort(key=lambda post: post.get("create_at", 0))
-
-        if last_viewed_at is not None and last_viewed_at > 0:
-            unread_posts = [
-                post for post in ordered_posts if post.get("create_at", 0) > last_viewed_at
-            ]
+        unread_posts: List[Dict[str, str]] = []
+        if last_viewed_ts > 0:
+            last_read_post: Optional[Dict[str, str]] = None
+            for post in ordered_posts:
+                created = self._coerce_int(post.get("create_at"))
+                if created > last_viewed_ts:
+                    unread_posts.append(post)
+                    continue
+                last_read_post = post
+                break
+            if last_read_post is not None:
+                unread_posts.append(last_read_post)
         else:
-            unread_limit = max(unread_count, 0)
-            unread_posts = ordered_posts[-unread_limit:] if unread_limit else []
+            unread_limit = max(self._coerce_int(unread_count), 0)
+            if unread_limit:
+                unread_posts = ordered_posts[:unread_limit]
+            else:
+                unread_posts = ordered_posts[:50]
 
         LOGGER.debug(
             "Filtered %d unread posts (from %d fetched) for channel %s",
@@ -151,6 +188,29 @@ class MattermostClient:
             channel_id,
         )
         return unread_posts
+
+    @staticmethod
+    def _is_channel_muted(member: Dict[str, object]) -> bool:
+        notify_props = member.get("notify_props")
+        if isinstance(notify_props, dict):
+            muted = notify_props.get("muted")
+            if isinstance(muted, str) and muted.lower() == "true":
+                return True
+            mark_unread = notify_props.get("mark_unread")
+            if isinstance(mark_unread, str) and mark_unread.lower() == "mention":
+                return True
+        return False
+
+    @staticmethod
+    def _coerce_int(value: object) -> int:
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return 0
+        return 0
 
     def acknowledge_channel(self, channel_id: str, viewed_at: Optional[datetime] = None) -> None:
         payload: Dict[str, int] = {}
