@@ -1,0 +1,8 @@
+mattermost:
+  base_url: "https://mattermost.example.com"
+  token: "YOUR_PERSONAL_ACCESS_TOKEN"
+summarizer:
+  model_path: "/absolute/path/to/llama-model.bin"
+storage:
+  data_dir: "~/Library/Application Support/MattermostSummaries"
+poll_interval: 90
