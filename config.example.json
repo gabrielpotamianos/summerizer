@@ -1,0 +1,16 @@
+{
+  "mattermost": {
+    "base_url": "https://mattermost.example.com",
+    "token": "YOUR_PERSONAL_ACCESS_TOKEN",
+    "polling_interval": 30,
+    "storage_dir": "./data"
+  },
+  "llm": {
+    "model_path": "./models/ggml-model-q4_0.bin",
+    "context_window": 2048,
+    "temperature": 0.3,
+    "max_tokens": 512,
+    "threads": 4
+  },
+  "refresh_ui_interval": 5
+}
