@@ -7,7 +7,7 @@ application.
 
 ## Features
 
-- Polls the Mattermost REST API with a personal access token
+- Prompts for your Mattermost credentials and reuses the issued token for API calls
 - Persists unread channel transcripts and summaries on disk
 - Uses a local LLaMA model (via `llama-cpp-python`) to build concise recaps
 - macOS-friendly Qt user interface that highlights unread channels
@@ -27,7 +27,6 @@ application.
    Copy `config.example.json` to `config.json` and update the values:
 
    - `mattermost.base_url`: Base Mattermost URL (the script appends `/api/v4`)
-   - `mattermost.token`: Your personal access token
    - `mattermost.polling_interval`: How often to check for new messages (seconds)
    - `mattermost.storage_dir`: Where to store transcripts and summaries
    - `llm.model_path`: Path to your local LLaMA compatible GGUF/GGML model
@@ -39,8 +38,10 @@ application.
    python main.py config.json
    ```
 
-   The background service runs alongside the UI. As unread conversations arrive,
-   the summaries are refreshed automatically.
+   The application first opens a login window so you can provide your Mattermost
+   username/email and password. After a successful login the background service
+   runs alongside the summary UI. As unread conversations arrive, the summaries
+   are refreshed automatically.
 
 ## Project layout
 

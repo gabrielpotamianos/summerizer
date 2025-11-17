@@ -12,7 +12,7 @@ class MattermostConfig:
     """Configuration required to connect to Mattermost."""
 
     base_url: str
-    token: str
+    token: Optional[str] = None
     polling_interval: float = 30.0
     storage_dir: Path = field(default_factory=lambda: Path.cwd() / "data")
 

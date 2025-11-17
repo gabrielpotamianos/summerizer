@@ -31,6 +31,8 @@ class MattermostClient:
 
     def __init__(self, config: MattermostConfig) -> None:
         self._config = config
+        if not config.token:
+            raise ValueError("Mattermost authentication token is required")
         self._session = requests.Session()
         self._session.headers.update(
             {
@@ -39,6 +41,21 @@ class MattermostClient:
             }
         )
         LOGGER.debug("Mattermost client initialised with base url %s", config.base_url)
+
+    @staticmethod
+    def login_with_credentials(base_url: str, username: str, password: str) -> str:
+        """Authenticate against Mattermost and return a session token."""
+
+        response = requests.post(
+            f"{base_url}/users/login",
+            json={"login_id": username, "password": password},
+            timeout=30,
+        )
+        response.raise_for_status()
+        token = response.headers.get("Token")
+        if not token:
+            raise RuntimeError("Mattermost server did not return an access token")
+        return token
 
     def _url(self, path: str) -> str:
         return f"{self._config.base_url}{path}"
