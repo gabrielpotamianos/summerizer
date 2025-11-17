@@ -4,13 +4,85 @@ from __future__ import annotations
 
 import logging
 from queue import Queue, Empty
-from typing import Dict
+from typing import Dict, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from .mattermost import MattermostClient
 from .service import ChannelSummary
 
 LOGGER = logging.getLogger(__name__)
+
+
+class LoginDialog(QtWidgets.QDialog):
+    """Dialog prompting for Mattermost credentials before connecting."""
+
+    def __init__(self, base_url: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._base_url = base_url
+        self._token: Optional[str] = None
+        self.setWindowTitle("Connect to Mattermost")
+        self.setModal(True)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        description = QtWidgets.QLabel(
+            "Enter your Mattermost username (or email) and password to continue."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        form = QtWidgets.QFormLayout()
+        self._username = QtWidgets.QLineEdit()
+        self._username.setPlaceholderText("Username or email")
+        self._password = QtWidgets.QLineEdit()
+        self._password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        form.addRow("Username", self._username)
+        form.addRow("Password", self._password)
+        layout.addLayout(form)
+
+        self._status = QtWidgets.QLabel()
+        self._status.setStyleSheet("color: #b00020;")
+        layout.addWidget(self._status)
+
+        self._buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel
+            | QtWidgets.QDialogButtonBox.StandardButton.Ok
+        )
+        self._buttons.accepted.connect(self._attempt_login)
+        self._buttons.rejected.connect(self.reject)
+        layout.addWidget(self._buttons)
+
+    @property
+    def token(self) -> Optional[str]:
+        return self._token
+
+    def _attempt_login(self) -> None:
+        username = self._username.text().strip()
+        password = self._password.text()
+        if not username or not password:
+            self._status.setText("Username and password are required.")
+            return
+        self._set_busy(True)
+        try:
+            token = MattermostClient.login_with_credentials(
+                self._base_url, username, password
+            )
+        except Exception as exc:  # pragma: no cover - UI feedback
+            self._status.setText(f"Login failed: {exc}")
+            return
+        finally:
+            self._set_busy(False)
+        self._token = token
+        self.accept()
+
+    def _set_busy(self, busy: bool) -> None:
+        self._buttons.setEnabled(not busy)
+        if busy:
+            QtWidgets.QApplication.setOverrideCursor(
+                QtCore.Qt.CursorShape.WaitCursor
+            )
+        else:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
 
 class SummaryListModel(QtCore.QAbstractListModel):

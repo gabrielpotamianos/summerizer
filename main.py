@@ -13,7 +13,7 @@ from PyQt6 import QtWidgets
 
 from summarizer.config import LLMConfig, MattermostConfig, ServiceConfig
 from summarizer.service import ChannelSummary, SummariserService
-from summarizer.ui import SummaryWindow
+from summarizer.ui import LoginDialog, SummaryWindow
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
@@ -37,12 +37,21 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
 
-    queue: Queue[ChannelSummary] = Queue()
+    app = QtWidgets.QApplication([])
+    login_dialog = LoginDialog(config.mattermost.base_url)
+    if login_dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+        LOGGER.info("Login cancelled; exiting application")
+        return
+    token = login_dialog.token
+    if not token:
+        LOGGER.error("Login dialog closed without providing a token")
+        return
+    config.mattermost.token = token
 
+    queue: Queue[ChannelSummary] = Queue()
     service = SummariserService(config, queue)
     service.start()
 
-    app = QtWidgets.QApplication([])
     window = SummaryWindow(queue, refresh_interval=config.refresh_ui_interval)
 
     for summary in service.load_existing_summaries():
