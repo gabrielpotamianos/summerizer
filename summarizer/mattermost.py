@@ -43,12 +43,17 @@ class MattermostClient:
         LOGGER.debug("Mattermost client initialised with base url %s", config.base_url)
 
     @staticmethod
-    def login_with_credentials(base_url: str, username: str, password: str) -> str:
+    def login_with_credentials(
+        base_url: str, username: str, password: str, mfa_code: Optional[str] = None
+    ) -> str:
         """Authenticate against Mattermost and return a session token."""
 
+        payload = {"login_id": username, "password": password}
+        if mfa_code:
+            payload["token"] = mfa_code
         response = requests.post(
             f"{base_url}/users/login",
-            json={"login_id": username, "password": password},
+            json=payload,
             timeout=30,
         )
         response.raise_for_status()
