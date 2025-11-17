@@ -26,7 +26,7 @@ class LoginDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
         description = QtWidgets.QLabel(
-            "Enter your Mattermost username (or email) and password to continue."
+            "Enter your Mattermost username (or email), password, and MFA code if required."
         )
         description.setWordWrap(True)
         layout.addWidget(description)
@@ -36,8 +36,12 @@ class LoginDialog(QtWidgets.QDialog):
         self._username.setPlaceholderText("Username or email")
         self._password = QtWidgets.QLineEdit()
         self._password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._mfa_code = QtWidgets.QLineEdit()
+        self._mfa_code.setPlaceholderText("One-time code (optional)")
+        self._mfa_code.setMaxLength(10)
         form.addRow("Username", self._username)
         form.addRow("Password", self._password)
+        form.addRow("MFA code", self._mfa_code)
         layout.addLayout(form)
 
         self._status = QtWidgets.QLabel()
@@ -62,10 +66,11 @@ class LoginDialog(QtWidgets.QDialog):
         if not username or not password:
             self._status.setText("Username and password are required.")
             return
+        mfa_code = self._mfa_code.text().strip()
         self._set_busy(True)
         try:
             token = MattermostClient.login_with_credentials(
-                self._base_url, username, password
+                self._base_url, username, password, mfa_code or None
             )
         except Exception as exc:  # pragma: no cover - UI feedback
             self._status.setText(f"Login failed: {exc}")
