@@ -52,15 +52,19 @@ def main() -> None:
     service = SummariserService(config, queue)
     service.start()
 
-    window = SummaryWindow(queue, refresh_interval=config.refresh_ui_interval)
-
     for summary in service.load_existing_summaries():
         queue.put(summary)
 
+    window = SummaryWindow(queue, refresh_interval=config.refresh_ui_interval)
     window.show()
+
+    def _shutdown() -> None:
+        LOGGER.info("Stopping Mattermost polling service")
+        service.stop()
+        service.join(timeout=15)
+
+    app.aboutToQuit.connect(_shutdown)  # type: ignore[attr-defined]
     app.exec()
-    service.stop()
-    service.join(timeout=5)
 
 
 if __name__ == "__main__":

@@ -2,14 +2,14 @@
 
 A desktop service for macOS that continuously monitors your Mattermost account
 for unread group conversations, stores the raw messages, generates summaries
-with a local LLaMA model, and displays them in a native-feeling Python (PyQt)
-application.
+via Groq's hosted LLaMA-3.3 70B model, and displays them in a native-feeling
+Python (PyQt) application.
 
 ## Features
 
 - Prompts for your Mattermost credentials and reuses the issued token for API calls
 - Persists unread channel transcripts and summaries on disk
-- Uses a local LLaMA model (via `llama-cpp-python`) to build concise recaps
+- Uses Groq's `llama-3.3-70b-versatile` chat model to build concise recaps
 - macOS-friendly Qt user interface that highlights unread channels
 
 ## Getting started
@@ -29,8 +29,12 @@ application.
    - `mattermost.base_url`: Base Mattermost URL (the script appends `/api/v4`)
    - `mattermost.polling_interval`: How often to check for new messages (seconds)
    - `mattermost.storage_dir`: Where to store transcripts and summaries
-   - `llm.model_path`: Path to your local LLaMA compatible GGUF/GGML model
-   - `llm.threads`: Optional number of CPU threads for inference
+   - `llm.api_key`: (Optional) Groq API key; falls back to the `GROQ_API_KEY` env var
+   - `llm.endpoint`: Groq-compatible chat completion endpoint
+   - `llm.model_name`: Chat model name (defaults to `llama-3.3-70b-versatile`)
+   - `llm.request_timeout` / `llm.max_retries`: Network tuning knobs for the Groq calls
+   - `llm.inter_request_delay`: Minimum seconds to wait between Groq calls
+   - `llm.ca_bundle`: (Optional) Path to a custom CA bundle for HTTPS verification
 
 3. **Run the desktop application**
 
@@ -48,7 +52,7 @@ application.
 - `main.py` – Application entry point
 - `summarizer/config.py` – Configuration dataclasses
 - `summarizer/mattermost.py` – Mattermost REST client
-- `summarizer/llm.py` – Local LLaMA wrapper and message collation helper
+- `summarizer/llm.py` – Groq chat wrapper and message collation helper
 - `summarizer/storage.py` – File-system persistence helpers
 - `summarizer/service.py` – Background worker thread orchestrating everything
 - `summarizer/ui.py` – PyQt-based user interface
@@ -57,8 +61,7 @@ application.
 
 See `requirements.txt` for the full list. Notable packages:
 
-- `requests` for HTTP calls
-- `llama-cpp-python` for local LLaMA inference
+- `requests` for Groq/OpenAI-compatible HTTP calls
 - `PyQt6` for the macOS desktop UI
 
 ## Notes

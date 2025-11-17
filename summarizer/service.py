@@ -7,9 +7,10 @@ import threading
 import time
 from datetime import datetime, timezone
 from queue import Queue
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Sequence
 
 from .config import ServiceConfig
+from .llm import LocalLLM, SummaryContext, collate_messages
 from .mattermost import ChannelUnread, MattermostClient
 from .storage import TranscriptStorage
 
@@ -45,6 +46,8 @@ class SummariserService(threading.Thread):
         self._queue = queue
         self._client = MattermostClient(config.mattermost)
         self._storage = TranscriptStorage(config.mattermost.storage_dir)
+        self._llm = LocalLLM(config.llm)
+        self._process_unread_channels()
         self._running = threading.Event()
         self._running.set()
 
@@ -84,23 +87,25 @@ class SummariserService(threading.Thread):
                 LOGGER.debug("No new messages for %s", unread.display_name)
                 continue
             self._storage.save_messages(unread.channel_name, posts)
-            timestamps = self._extract_new_message_timestamps(posts, unread.last_viewed_at)
+            timestamps = self._extract_new_message_timestamps(
+                posts, unread.last_viewed_at
+            )
             if not timestamps:
                 LOGGER.debug(
                     "Skipping %s because no unread timestamps were identified",
                     unread.display_name,
                 )
                 continue
-            start_ts = min(timestamps)
-            end_ts = max(timestamps)
-            self._storage.update_last_processed_timestamp(
-                unread.channel_name, end_ts
-            )
             unread.unread_count = len(timestamps)
-            summary = self._build_placeholder_summary(unread, start_ts, end_ts)
+            sorted_posts = self._sort_posts(posts)
+            summary = self._summarise_channel(unread, sorted_posts, timestamps)
+            end_ts = max(timestamps)
+            self._storage.update_last_processed_timestamp(unread.channel_name, end_ts)
             self._storage.save_summary(unread.channel_name, summary)
             LOGGER.info(
-                "Stored %d new messages for %s", unread.unread_count, unread.display_name
+                "Stored %d new messages for %s",
+                unread.unread_count,
+                unread.display_name,
             )
             self._queue.put(ChannelSummary(unread, summary))
 
@@ -125,7 +130,9 @@ class SummariserService(threading.Thread):
             yield ChannelSummary(dummy_unread, summary)
 
     @staticmethod
-    def _extract_new_message_timestamps(posts: List[Dict], last_viewed_at: int) -> List[int]:
+    def _extract_new_message_timestamps(
+        posts: List[Dict], last_viewed_at: int
+    ) -> List[int]:
         timestamps: List[int] = []
         for post in posts:
             created = post.get("create_at")
@@ -136,7 +143,41 @@ class SummariserService(threading.Thread):
                 timestamps.append(created_int)
         return timestamps
 
-    def _build_placeholder_summary(
+    def _summarise_channel(
+        self,
+        unread: ChannelUnread,
+        posts: Sequence[Dict],
+        timestamps: Sequence[int],
+    ) -> str:
+        start_ts = min(timestamps)
+        end_ts = max(timestamps)
+        conversation, _, _ = collate_messages(posts)
+        if not conversation:
+            return self._fallback_summary(unread, start_ts, end_ts)
+        context = SummaryContext(
+            group_name=unread.display_name or unread.channel_name,
+            start_date=self._format_timestamp(start_ts),
+            end_date=self._format_timestamp(end_ts),
+        )
+        try:
+            summary = self._llm.summarise(conversation, context).strip()
+        except Exception:
+            LOGGER.exception("Failed to generate summary for %s", unread.display_name)
+            summary = ""
+        return summary or self._fallback_summary(unread, start_ts, end_ts)
+
+    @staticmethod
+    def _sort_posts(posts: Sequence[Dict]) -> List[Dict]:
+        return sorted(
+            posts,
+            key=lambda item: (
+                int(item.get("create_at", 0))
+                if isinstance(item.get("create_at"), (int, float))
+                else 0
+            ),
+        )
+
+    def _fallback_summary(
         self, unread: ChannelUnread, start_ts: int, end_ts: int
     ) -> str:
         start = self._format_timestamp(start_ts)
@@ -146,5 +187,5 @@ class SummariserService(threading.Thread):
         plural = "s" if count != 1 else ""
         return (
             f"{count} new message{plural} captured ({window}).\n"
-            "Summaries are temporarily disabled while transcripts are being collected."
+            "Unable to generate an AI summary at this time."
         )

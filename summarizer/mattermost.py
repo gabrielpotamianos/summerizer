@@ -46,8 +46,6 @@ class MattermostClient:
     def login_with_credentials(
         base_url: str, username: str, password: str, mfa_code: Optional[str] = None
     ) -> str:
-        """Authenticate against Mattermost and return a session token."""
-
         payload = {"login_id": username, "password": password}
         if mfa_code:
             payload["token"] = mfa_code

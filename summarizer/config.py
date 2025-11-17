@@ -25,13 +25,24 @@ class MattermostConfig:
 
 @dataclass
 class LLMConfig:
-    """Configuration for the local LLM used to summarise chats."""
+    """Configuration for the Groq-hosted LLM used to summarise chats."""
 
-    model_path: Path
+    api_key: Optional[str] = None
+    endpoint: str = "https://api.groq.com/openai/v1/chat/completions"
+    model_name: str = "llama-3.3-70b-versatile"
     context_window: int = 2048
     temperature: float = 0.3
     max_tokens: int = 512
-    threads: Optional[int] = None
+    request_timeout: int = 60
+    max_retries: int = 2
+    inter_request_delay: float = 0.0
+    batch_size: int = 3
+    max_batch_characters: int = 60000
+    max_batches: int = 4
+    rate_limit_backoff: float = 30.0
+    ca_bundle: Optional[str] = None
+    model_path: Optional[Path] = None  # legacy; ignored
+    threads: Optional[int] = None  # legacy; ignored
 
 
 @dataclass

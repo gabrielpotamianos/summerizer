@@ -5,11 +5,20 @@
     "storage_dir": "./data"
   },
   "llm": {
-    "model_path": "./models/ggml-model-q4_0.bin",
+    "api_key": null,
+    "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+    "model_name": "llama-3.3-70b-versatile",
     "context_window": 2048,
     "temperature": 0.3,
     "max_tokens": 512,
-    "threads": 4
+    "request_timeout": 60,
+    "max_retries": 2,
+    "inter_request_delay": 2.0,
+    "batch_size": 3,
+    "max_batch_characters": 60000,
+    "max_batches": 4,
+    "rate_limit_backoff": 30.0,
+    "ca_bundle": "/path/to/corporate-ca.pem"
   },
   "refresh_ui_interval": 5
 }
