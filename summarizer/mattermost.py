@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Protocol, Tuple, runtime_checkable
 
 import requests
 
@@ -26,14 +26,36 @@ class ChannelUnread:
     last_viewed_at: int
 
 
-class MattermostClient:
+@runtime_checkable
+class MattermostClientProtocol(Protocol):
+    """Protocol implemented by Mattermost client implementations."""
+
+    def list_unread_channels(self) -> Iterable[ChannelUnread]:
+        ...
+
+    def get_unread_posts(
+        self,
+        channel_id: str,
+        last_viewed_at: Optional[int] = None,
+        unread_count: int = 0,
+    ) -> List[Dict[str, str]]:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+class MattermostClient(MattermostClientProtocol):
     """Lightweight Mattermost REST API client."""
 
-    def __init__(self, config: MattermostConfig) -> None:
+    def __init__(
+        self, config: MattermostConfig, session: Optional[requests.Session] = None
+    ) -> None:
         self._config = config
         if not config.token:
             raise ValueError("Mattermost authentication token is required")
-        self._session = requests.Session()
+        self._session_owner = session is None
+        self._session = session or requests.Session()
         self._session.headers.update(
             {
                 "Authorization": f"Bearer {config.token}",
@@ -41,6 +63,16 @@ class MattermostClient:
             }
         )
         LOGGER.debug("Mattermost client initialised with base url %s", config.base_url)
+
+    def close(self) -> None:
+        if self._session_owner:
+            self._session.close()
+
+    def __enter__(self) -> MattermostClient:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     @staticmethod
     def login_with_credentials(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Protocol, runtime_checkable
 
 
 _INVALID_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
@@ -18,7 +18,34 @@ def safe_filename(name: str) -> str:
     return cleaned or "channel"
 
 
-class TranscriptStorage:
+@runtime_checkable
+class TranscriptStorageProtocol(Protocol):
+    """Protocol describing the persistence operations needed by the service."""
+
+    root: Path
+
+    def save_messages(self, channel_name: str, messages: Iterable[Dict]) -> Path:
+        ...
+
+    def save_summary(self, channel_name: str, summary: str) -> Path:
+        ...
+
+    def get_last_processed_timestamp(self, channel_name: str) -> Optional[int]:
+        ...
+
+    def update_last_processed_timestamp(
+        self, channel_name: str, timestamp: Optional[int]
+    ) -> None:
+        ...
+
+    def load_summary(self, channel_name: str) -> str:
+        ...
+
+    def list_channels(self) -> List[str]:
+        ...
+
+
+class TranscriptStorage(TranscriptStorageProtocol):
     """Save transcripts and summary data to disk."""
 
     def __init__(self, root: Path) -> None:

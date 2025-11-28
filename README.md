@@ -57,6 +57,62 @@ Python (PyQt) application.
 - `summarizer/service.py` – Background worker thread orchestrating everything
 - `summarizer/ui.py` – PyQt-based user interface
 
+## Modular integration guide
+
+All high-level components can now be instantiated independently so you can embed
+the summarisation pipeline into other applications, CLIs, or schedulers. The
+recommended wiring order is:
+
+```python
+from pathlib import Path
+from queue import Queue
+
+from summarizer.config import ServiceConfig
+from summarizer.llm import LocalLLM
+from summarizer.mattermost import MattermostClient
+from summarizer.service import ChannelSummary, SummariserService
+from summarizer.storage import TranscriptStorage
+
+config = ServiceConfig.from_json(Path("config.json"))
+
+# Acquire a token however you like (use LoginDialog, OAuth, etc.)
+config.mattermost.token = "<user-token>"
+
+queue: Queue[ChannelSummary] = Queue()
+mattermost = MattermostClient(config.mattermost)
+storage = TranscriptStorage(config.mattermost.storage_dir)
+llm = LocalLLM(config.llm)
+
+service = SummariserService(
+    config,
+    queue,
+    mattermost_client=mattermost,
+    storage=storage,
+    llm=llm,
+)
+service.process_once()  # Fetch unread threads and run the LLM on-demand.
+service.close()
+```
+
+Key integration points:
+
+- `ServiceConfig.from_json` / `to_dict` keep configuration serialisation
+  decoupled from the main application.
+- `MattermostClient` and `LocalLLM` accept an optional pre-configured
+  `requests.Session` so you can plug in custom authentication, retries, or
+  instrumentation. Both expose `close()` / context-manager helpers.
+- `SummariserService.process_once()` lets you decide when to trigger Groq
+  summarisation—call it manually, run it inside a cron job, or continue using
+  the provided background `threading.Thread` implementation by calling `start()`.
+- `LoginDialog` receives an optional `login_handler`, so alternative credential
+  brokers (SSO portals, OAuth devices, etc.) can feed tokens into your flow.
+- `SummaryWindow` consumes any object that implements `get_nowait()`, making it
+  easy to hook a different queue or async channel implementation.
+
+When embedding the modules, remember to call `SummariserService.close()` (or
+directly close the Mattermost/LLM clients) after you are done to release HTTP
+sessions.
+
 ## Dependencies
 
 See `requirements.txt` for the full list. Notable packages:

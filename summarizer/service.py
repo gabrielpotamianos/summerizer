@@ -5,24 +5,25 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from queue import Queue
 from typing import Dict, Iterable, List, Sequence
 
 from .config import ServiceConfig
-from .llm import LocalLLM, SummaryContext, collate_messages
-from .mattermost import ChannelUnread, MattermostClient
-from .storage import TranscriptStorage
+from .llm import LLMBackend, LocalLLM, SummaryContext, collate_messages
+from .mattermost import ChannelUnread, MattermostClient, MattermostClientProtocol
+from .storage import TranscriptStorage, TranscriptStorageProtocol
 
 LOGGER = logging.getLogger(__name__)
 
 
+@dataclass
 class ChannelSummary:
     """Container for summarised channel data."""
 
-    def __init__(self, unread: ChannelUnread, summary: str) -> None:
-        self.unread = unread
-        self.summary = summary
+    unread: ChannelUnread
+    summary: str
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -40,19 +41,42 @@ class SummariserService(threading.Thread):
 
     daemon = True
 
-    def __init__(self, config: ServiceConfig, queue: Queue[ChannelSummary]) -> None:
+    def __init__(
+        self,
+        config: ServiceConfig,
+        queue: Queue[ChannelSummary],
+        mattermost_client: MattermostClientProtocol,
+        storage: TranscriptStorageProtocol,
+        llm: LLMBackend,
+    ) -> None:
         super().__init__(name="MattermostSummariser")
         self._config = config
         self._queue = queue
-        self._client = MattermostClient(config.mattermost)
-        self._storage = TranscriptStorage(config.mattermost.storage_dir)
-        self._llm = LocalLLM(config.llm)
-        self._process_unread_channels()
+        self._client = mattermost_client
+        self._storage = storage
+        self._llm = llm
         self._running = threading.Event()
         self._running.set()
 
+    @classmethod
+    def from_config(
+        cls, config: ServiceConfig, queue: Queue[ChannelSummary]
+    ) -> SummariserService:
+        """Instantiate the service with the default client, storage, and LLM."""
+
+        client = MattermostClient(config.mattermost)
+        storage = TranscriptStorage(config.mattermost.storage_dir)
+        llm = LocalLLM(config.llm)
+        return cls(config, queue, client, storage, llm)
+
     def stop(self) -> None:
         self._running.clear()
+
+    def close(self) -> None:
+        """Release any owned network clients."""
+
+        self._close_resource(self._client)
+        self._close_resource(self._llm)
 
     def run(self) -> None:  # noqa: D401 - thread entry point
         """Continuously poll Mattermost for unread messages and persist them."""
@@ -61,13 +85,22 @@ class SummariserService(threading.Thread):
         LOGGER.info("Starting Mattermost summariser loop with interval %.1fs", interval)
         while self._running.is_set():
             try:
-                self._process_unread_channels()
+                self.process_once()
             except Exception:  # pragma: no cover - defensive logging
                 LOGGER.exception("Unexpected error while processing unread channels")
             finally:
                 time.sleep(interval)
 
-    def _process_unread_channels(self) -> None:
+    def process_once(self) -> List[ChannelSummary]:
+        """Fetch unread conversations once and return the generated summaries."""
+
+        summaries: List[ChannelSummary] = []
+        for summary in self._generate_summaries():
+            summaries.append(summary)
+            self._queue.put(summary)
+        return summaries
+
+    def _generate_summaries(self) -> Iterable[ChannelSummary]:
         for unread in self._client.list_unread_channels():
             posts = self._client.get_unread_posts(
                 unread.channel_id,
@@ -107,7 +140,7 @@ class SummariserService(threading.Thread):
                 unread.unread_count,
                 unread.display_name,
             )
-            self._queue.put(ChannelSummary(unread, summary))
+            yield ChannelSummary(unread, summary)
 
     @staticmethod
     def _format_timestamp(timestamp: int | None) -> str:
@@ -189,3 +222,9 @@ class SummariserService(threading.Thread):
             f"{count} new message{plural} captured ({window}).\n"
             "Unable to generate an AI summary at this time."
         )
+
+    @staticmethod
+    def _close_resource(resource: object) -> None:
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()

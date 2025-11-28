@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 from queue import Queue
-from typing import Any, Dict
 
 from PyQt6 import QtWidgets
 
-from summarizer.config import LLMConfig, MattermostConfig, ServiceConfig
+from summarizer.config import ServiceConfig
+from summarizer.llm import LocalLLM
+from summarizer.mattermost import MattermostClient
 from summarizer.service import ChannelSummary, SummariserService
+from summarizer.storage import TranscriptStorage
 from summarizer.ui import LoginDialog, SummaryWindow
 
 logging.basicConfig(level=logging.INFO)
@@ -26,11 +27,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_config(path: Path) -> ServiceConfig:
-    payload: Dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-    mattermost_cfg = MattermostConfig(**payload["mattermost"])
-    llm_cfg = LLMConfig(**payload["llm"])
-    refresh_ui_interval = payload.get("refresh_ui_interval", 5.0)
-    return ServiceConfig(mattermost=mattermost_cfg, llm=llm_cfg, refresh_ui_interval=refresh_ui_interval)
+    return ServiceConfig.from_json(path)
 
 
 def main() -> None:
@@ -49,7 +46,16 @@ def main() -> None:
     config.mattermost.token = token
 
     queue: Queue[ChannelSummary] = Queue()
-    service = SummariserService(config, queue)
+    mattermost_client = MattermostClient(config.mattermost)
+    storage = TranscriptStorage(config.mattermost.storage_dir)
+    llm = LocalLLM(config.llm)
+    service = SummariserService(
+        config,
+        queue,
+        mattermost_client=mattermost_client,
+        storage=storage,
+        llm=llm,
+    )
     service.start()
 
     for summary in service.load_existing_summaries():
@@ -62,6 +68,7 @@ def main() -> None:
         LOGGER.info("Stopping Mattermost polling service")
         service.stop()
         service.join(timeout=15)
+        service.close()
 
     app.aboutToQuit.connect(_shutdown)  # type: ignore[attr-defined]
     app.exec()

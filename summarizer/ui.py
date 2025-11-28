@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from queue import Queue, Empty
-from typing import Dict, Optional
+from queue import Empty, Queue
+from typing import Callable, Dict, Optional, Protocol
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -17,10 +17,18 @@ LOGGER = logging.getLogger(__name__)
 class LoginDialog(QtWidgets.QDialog):
     """Dialog prompting for Mattermost credentials before connecting."""
 
-    def __init__(self, base_url: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    LoginHandler = Callable[[str, str, str, Optional[str]], str]
+
+    def __init__(
+        self,
+        base_url: str,
+        parent: Optional[QtWidgets.QWidget] = None,
+        login_handler: Optional[LoginHandler] = None,
+    ) -> None:
         super().__init__(parent)
         self._base_url = base_url
         self._token: Optional[str] = None
+        self._login_handler = login_handler or MattermostClient.login_with_credentials
         self.setWindowTitle("Connect to Mattermost")
         self.setModal(True)
 
@@ -69,7 +77,7 @@ class LoginDialog(QtWidgets.QDialog):
         mfa_code = self._mfa_code.text().strip()
         self._set_busy(True)
         try:
-            token = MattermostClient.login_with_credentials(
+            token = self._login_handler(
                 self._base_url, username, password, mfa_code or None
             )
         except Exception as exc:  # pragma: no cover - UI feedback
@@ -135,10 +143,19 @@ class SummaryListModel(QtCore.QAbstractListModel):
         return self._items[channel_id].summary
 
 
+class SummaryQueue(Protocol):
+    """Protocol describing the minimal interface SummaryWindow expects."""
+
+    def get_nowait(self) -> ChannelSummary:
+        ...
+
+
 class SummaryWindow(QtWidgets.QMainWindow):
     """Main window showing channel list and summary pane."""
 
-    def __init__(self, queue: Queue[ChannelSummary], refresh_interval: float) -> None:
+    def __init__(
+        self, queue: SummaryQueue | Queue[ChannelSummary], refresh_interval: float
+    ) -> None:
         super().__init__()
         self._queue = queue
         self.setWindowTitle("Mattermost Summaries")

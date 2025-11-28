@@ -11,7 +11,18 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Set,
+    Tuple,
+    runtime_checkable,
+)
 
 from email.utils import parsedate_to_datetime
 import requests
@@ -30,13 +41,27 @@ class SummaryContext:
     end_date: str
 
 
-class LocalLLM:
+@runtime_checkable
+class LLMBackend(Protocol):
+    """Protocol implemented by LLM adapters used by the service."""
+
+    def summarise(self, messages: Sequence[str], context: SummaryContext) -> str:
+        ...
+
+    def summarise_groups(
+        self,
+        groups: Sequence[Tuple[str, SummaryContext, Sequence[str]]],
+    ) -> Dict[str, str]:
+        ...
+
+
+class LocalLLM(LLMBackend):
     """Thin wrapper around Groq's hosted LLaMA models."""
 
     DEFAULT_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
     DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, session: Optional[requests.Session] = None) -> None:
         self._config = config
         self._api_key = getattr(config, "api_key", None) or os.getenv("GROQ_API_KEY")
         if not self._api_key:
@@ -51,7 +76,8 @@ class LocalLLM:
         self._min_delay = max(0.0, float(getattr(config, "inter_request_delay", 0.0)))
         self._last_request = 0.0
 
-        self._session = requests.Session()
+        self._session_owner = session is None
+        self._session = session or requests.Session()
         self._session.headers.update(
             {
                 "Authorization": f"Bearer {self._api_key}",
@@ -61,6 +87,18 @@ class LocalLLM:
         self._ca_bundle = getattr(config, "ca_bundle", None)
         if self._ca_bundle:
             self._session.verify = self._ca_bundle
+
+    def close(self) -> None:
+        """Close the owned HTTP session if this instance created it."""
+
+        if self._session_owner:
+            self._session.close()
+
+    def __enter__(self) -> LocalLLM:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def summarise(self, messages: Sequence[str], context: SummaryContext) -> str:
         if not messages:
